@@ -1205,6 +1205,33 @@
             <div style="margin-top:8px;text-align:right">
               <button class="btn" id="saveSettings">Save</button>
             </div>
+
+            <div style="margin-top:16px;background:var(--card);padding:14px;border-radius:12px;box-shadow:0 6px 18px rgba(15,23,42,0.04)">
+              <h3 style="margin:0 0 10px 0">🔄 Server Sync</h3>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <label style="display:flex;justify-content:space-between;align-items:center">
+                  <div>
+                    <div style="font-weight:600">Sync with Server</div>
+                    <div style="font-size:13px;color:var(--muted)">Enable per-device persistent state on a hosted server</div>
+                  </div>
+                  <input type="checkbox" id="toggleServerSync" />
+                </label>
+
+                <div style="margin-top:4px">
+                  <div style="font-weight:600;margin-bottom:6px">Server URL</div>
+                  <input class="input" id="serverUrlInput" type="text" placeholder="http://your-server.com" />
+                </div>
+
+                <div style="margin-top:4px">
+                  <div style="font-weight:600;margin-bottom:6px">Device ID</div>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input class="input" id="deviceIdDisplay" type="text" readonly style="flex:1" />
+                    <button class="btn ghost small" id="regenerateDeviceId">Regenerate</button>
+                  </div>
+                </div>
+
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1486,6 +1513,8 @@
       try{
         const state = { materials, transactions, defects, history, settings, productLibrary, alerts, sapInventory, nextImportNo };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        // if server sync is enabled, push local state to the server for this device
+        if(settings.serverSyncEnabled) syncToServer();
       } catch(e){ console.warn('Failed to save state', e); }
     }
 
@@ -1508,6 +1537,21 @@
 
     // settings + last-action / undo helper
     let settings = { serverSyncEnabled:false, serverUrl:'' };
+    // per-device identifier stored locally so different devices have different states when server sync is enabled
+    const DEVICE_ID_KEY = 'inventoryProDeviceId';
+    let deviceId = localStorage.getItem(DEVICE_ID_KEY);
+    if(!deviceId){
+      deviceId = generateUUID();
+      localStorage.setItem(DEVICE_ID_KEY, deviceId);
+    }
+    function generateUUID(){
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+
     // store last transaction action for undo (create/edit/delete)
     let lastTransactionAction = null;
 
@@ -1517,11 +1561,38 @@
         if(!settings.serverSyncEnabled) return;
         const url = (settings.serverUrl || '').replace(/\/$/, '');
         if(!url) return;
-        // POST the full state to server
-        const res = await fetch(`${url}/api/state`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({materials, transactions, defects, history}) });
+        // POST the full state to server for this device
+        const res = await fetch(`${url}/api/state?deviceId=${encodeURIComponent(deviceId)}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({materials, transactions, defects, history}) });
         if(!res.ok) console.warn('Server sync failed', res.status);
-        else addHistory('Sync','Synced to server', `State sent to ${url}`);
+        else addHistory('Sync','Synced to server', `State sent to ${url} (device ${deviceId})`);
       } catch(e){ console.warn('Server sync error', e); }
+    }
+
+    // fetch state for this device from server and apply it locally
+    async function fetchFromServer(){
+      try{
+        if(!settings.serverSyncEnabled) return;
+        const url = (settings.serverUrl || '').replace(/\/$/, '');
+        if(!url) return;
+        const res = await fetch(`${url}/api/state?deviceId=${encodeURIComponent(deviceId)}`);
+        if(!res.ok){ console.warn('Failed to fetch state', res.status); return; }
+        const body = await res.json();
+        if(body && body.ok && body.state){
+          const s = body.state;
+          materials = s.materials || [];
+          transactions = s.transactions || [];
+          defects = s.defects || [];
+          history = s.history || [];
+          productLibrary = s.productLibrary || productLibrary || [];
+          alerts = s.alerts || [];
+          sapInventory = s.sapInventory || [];
+          nextImportNo = s.nextImportNo || nextImportNo;
+          settings = Object.assign({}, settings, s.settings || {});
+          saveState();
+          refreshAll();
+          addHistory('Sync','Fetched state from server', `State loaded from ${url} (device ${deviceId})`);
+        }
+      }catch(e){ console.warn('Fetch server error', e); }
     }
 
     // load persisted data (if present) so the UI stays synced across reloads
@@ -1533,6 +1604,11 @@
       // seed a few demo history events so the History page isn't empty
       transactions.slice().reverse().forEach(t=> addHistory('Transaction', t.product || t.sku || 'Transaction', `${t.type} ${t.qty} x ${t.sku} (${t.product})`, t.sku));
       defects.slice().reverse().forEach(d=> addHistory('Defect', d.product || d.sku || 'Defect', `${d.type} on ${d.sku} (${d.product}) — ${d.status}`, d.sku));
+    }
+
+    // if server sync is enabled, try to fetch device-scoped state from server
+    if(settings.serverSyncEnabled){
+      fetchFromServer().catch(e => console.warn('Fetch from server failed', e));
     }
 
     // --- DOM helpers ---
@@ -3992,14 +4068,43 @@
       URL.revokeObjectURL(url);
     });
 
-    // settings save (demo)
+    // settings save (demo + server sync)
     $("#saveSettings")?.addEventListener('click', ()=>{
       const alertsEnabled = $("#toggleAlerts").checked;
       const autoReorder = $("#toggleReorder").checked;
       const threshold = Number($("#defaultThreshold").value);
+      const serverSyncEnabled = $("#toggleServerSync").checked;
+      const serverUrl = $("#serverUrlInput").value.trim();
+      // update settings
+      settings.serverSyncEnabled = !!serverSyncEnabled;
+      settings.serverUrl = serverUrl;
+      // persist
+      saveState();
+      // if enabling server sync, immediately fetch device state
+      if(settings.serverSyncEnabled){
+        fetchFromServer();
+      }
+      // update UI displays
+      $("#deviceIdDisplay").value = deviceId;
       refreshAll();
-      alert(`Settings saved (demo): Alerts: ${alertsEnabled}, AutoReorder: ${autoReorder}, Threshold: ${threshold}`);
+      alert('Settings saved');
     });
+
+    // regenerate device id (makes this browser/device a new device on server)
+    $("#regenerateDeviceId")?.addEventListener('click', ()=>{
+      deviceId = generateUUID();
+      localStorage.setItem(DEVICE_ID_KEY, deviceId);
+      $("#deviceIdDisplay").value = deviceId;
+      saveState();
+      alert('Device ID regenerated — this browser will now act as a new device');
+    });
+
+    // ensure server fields reflect current settings at startup
+    setTimeout(()=>{
+      $("#toggleServerSync").checked = !!settings.serverSyncEnabled;
+      $("#serverUrlInput").value = settings.serverUrl || '';
+      $("#deviceIdDisplay").value = deviceId || '';
+    }, 40);
 
     // User Management System
     let registeredUsers = JSON.parse(localStorage.getItem('registeredUsers')) || [];
