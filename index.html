@@ -92,6 +92,10 @@
     /* Modal */
     .modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;z-index:60}
     .modal{width:1000px;max-width:96%;background:var(--card);border-radius:12px;padding:24px;box-shadow:0 20px 50px rgba(2,6,23,0.3)} .modal h3{margin-bottom:8px} .modal .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
+    /* Constrain login modal so it never forces page scrollbar */
+    #loginOverlay .modal{ width:420px; max-width:92%; max-height:calc(100vh - 80px); overflow:auto; }
+    /* Ensure the overlay doesn't create page scroll */
+    #loginOverlay{ overflow:auto; }
     /* Responsive */
     @media (max-width:900px){ .grid-two{grid-template-columns:1fr} .sidebar{position:fixed;left:-100%;top:0;height:100%;z-index:80;transition:left .25s} .sidebar.open{left:0} .main{padding:14px} .toggle-sidebar{display:inline-flex;} }
     .toggle-sidebar{display:none;background:transparent;border:0;color:var(--text);cursor:pointer}
@@ -136,7 +140,10 @@
     /* Page display styles */
     .page{ padding:24px; overflow:auto; }
     /* Login page full viewport centering */
-    #login-page{ width:100vw; height:100vh; background:var(--bg); }
+    #login-page{ position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:0; z-index:300; overflow:auto; }
+    #login-page > div { width:100%; max-width:420px; max-height:calc(100vh - 80px); overflow:auto; padding:40px; border-radius:16px; box-shadow:0 10px 40px rgba(15,23,42,0.1); }
+    /* Make small adjustments for mobile */
+    @media (max-width:520px){ #login-page > div { padding:20px; margin:12px; } }
     /* Linear Programming styles */
     #linear-programming-page {
       font-family: "Segoe UI", Arial, sans-serif;
@@ -1572,19 +1579,26 @@
 
     // Show login page
     function showLoginPage() {
-      document.getElementById('login-page').style.display = 'flex';
-      document.getElementById('dashboard-page').style.display = 'none';
-      document.querySelector('.sidebar').style.display = 'none';
-      document.querySelector('header').style.display = 'none';
+      const loginPage = document.getElementById('login-page');
+      if(loginPage) loginPage.style.display = 'flex';
+      const dashboard = document.getElementById('dashboard-page'); if(dashboard) dashboard.style.display = 'none';
+      const side = document.querySelector('.sidebar'); if(side) side.style.display = 'none';
+      const hdr = document.querySelector('header'); if(hdr) hdr.style.display = 'none';
+      const mainEl = document.querySelector('.main'); if(mainEl) mainEl.style.marginLeft = '0';
+      // Lock body scroll while on login
+      document.body.style.overflow = 'hidden';
       isLoggedIn = false;
     }
 
     // Show dashboard
     function showDashboard() {
-      document.getElementById('login-page').style.display = 'none';
-      document.getElementById('dashboard-page').style.display = 'block';
-      document.querySelector('.sidebar').style.display = 'flex';
-      document.querySelector('header').style.display = 'flex';
+      const loginPage = document.getElementById('login-page'); if(loginPage) loginPage.style.display = 'none';
+      const dashboard = document.getElementById('dashboard-page'); if(dashboard) dashboard.style.display = 'block';
+      const side = document.querySelector('.sidebar'); if(side) side.style.display = 'flex';
+      const hdr = document.querySelector('header'); if(hdr) hdr.style.display = 'flex';
+      const mainEl = document.querySelector('.main'); if(mainEl) mainEl.style.marginLeft = '260px';
+      // Restore body scroll
+      document.body.style.overflow = '';
       isLoggedIn = true;
       updateUserDisplay();
       refreshAll();
